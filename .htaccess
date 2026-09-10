@@ -1,7 +1,7 @@
 Options -Indexes -MultiViews
 DirectoryIndex index.php
 
-<FilesMatch "(?i)^(config(?:\.example)?\.php|schema\.sql|README\.md|.*\.(zip|log|bak))$">
+<FilesMatch "(?i)^(config(?:\.example)?\.php|schema\.sql|README\.md|error_log|.*\.(zip|log|bak))$">
     Require all denied
 </FilesMatch>
 
@@ -15,4 +15,3 @@ DirectoryIndex index.php
     # Alkönyvtárban is működik; az eredeti query nem írhatja felül a kódot.
     RewriteRule ^([A-Za-z0-9]{3,32})/?$ index.php?code=$1 [END]
 </IfModule>
-

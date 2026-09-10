@@ -79,13 +79,38 @@ function render_problem(string $title, string $message, string $path, bool $setu
         <?php if ($setup): ?>
             <ol class="setup-steps">
                 <li>Hozz létre egy MySQL-adatbázist és felhasználót a cPanelben.</li>
-                <li>Importáld a <code>schema.sql</code> fájlt a phpMyAdminban.</li>
                 <li>Másold a <code>config.example.php</code> fájlt <code>config.php</code> néven.</li>
                 <li>Add meg benne a webcímet, az adatbázis adatait és a saját kezelői jelszavadat.</li>
+                <li>Frissítsd ezt az oldalt, majd a kezelői jelszó megadásával kattints a <strong>Séma importálása</strong> gombra.</li>
             </ol>
             <p class="small muted">A részletes útmutató a csomag README.md fájljában található.</p>
         <?php endif; ?>
         <a class="button secondary" href="<?= e($path) ?>">Vissza a kezdőlapra <?= icon('arrow') ?></a>
+    </section>
+    <?php
+    page_end();
+    exit;
+}
+
+function render_installation(array $config, string $error = ''): never
+{
+    $path = app_path($config);
+    page_start('Adatbázis telepítése', $path);
+    ?>
+    <section class="card login-card">
+        <span class="section-icon"><?= icon('lock') ?></span>
+        <h1>Adatbázis telepítése</h1>
+        <p class="muted">Az alkalmazás táblái még hiányoznak. A séma importálásával létrehozhatod őket.</p>
+        <p class="small muted">A telepítő a csomagban található schema.sql fájlt használja. A meglévő linkek és adatok megmaradnak.</p>
+        <?php notice($error); ?>
+        <form method="post" action="<?= e($path) ?>" class="login-form">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="action" value="install">
+            <label for="password">Kezelői jelszó</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required autofocus aria-describedby="install-password-hint">
+            <p class="hint" id="install-password-hint">A config.php fájlban megadott saját kezelői jelszavad.</p>
+            <button type="submit" class="button">Séma importálása <?= icon('arrow') ?></button>
+        </form>
     </section>
     <?php
     page_end();
@@ -115,12 +140,13 @@ function render_login(array $config, string $error = ''): never
     exit;
 }
 
-function render_dashboard(array $config, array $links, int $total, int $page, string $error, string $destination, int $length, ?array $result): void
+function render_dashboard(array $config, array $links, int $total, int $page, string $error, string $destination, int $length, ?array $result, string $success = ''): void
 {
     $path = app_path($config);
     page_start('Linkrövidítő', $path, true);
     ?>
     <div class="page-heading"><div><p class="eyebrow">LINKEK</p><h1>Hosszú helyett rövid.</h1></div><span class="count-badge"><?= number_format($total, 0, ',', ' ') ?> link</span></div>
+    <?php notice($success, 'success'); ?>
     <section class="card create-card" aria-labelledby="create-title">
         <div class="card-heading"><span class="section-icon"><?= icon('link') ?></span><h2 id="create-title">Új rövid link</h2></div>
         <?php notice($error); ?>
@@ -168,4 +194,3 @@ function render_dashboard(array $config, array $links, int $total, int $page, st
     <?php
     page_end();
 }
-

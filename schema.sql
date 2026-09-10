@@ -1,4 +1,5 @@
--- A cPanelben létrehozott adatbázisban futtasd (phpMyAdmin → Importálás).
+-- A felület „Séma importálása” gombja futtatja a cPanelben létrehozott adatbázisban.
+-- Szükség esetén phpMyAdminból is importálható.
 -- Újra importálható: a meglévő linkeket nem törli.
 CREATE TABLE IF NOT EXISTS short_links (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -17,4 +18,3 @@ CREATE TABLE IF NOT EXISTS short_login_attempts (
     PRIMARY KEY (client_key),
     KEY idx_login_window (window_started)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-

@@ -92,6 +92,94 @@ function database(array $config): PDO
     return $pdo;
 }
 
+function schema_ready(PDO $pdo): bool
+{
+    $queries = [
+        'SELECT id, code, destination, clicks, created_at FROM short_links LIMIT 0',
+        'SELECT client_key, attempts, window_started FROM short_login_attempts LIMIT 0',
+    ];
+    foreach ($queries as $query) {
+        try {
+            $pdo->query($query);
+        } catch (PDOException $exception) {
+            if ((int) ($exception->errorInfo[1] ?? 0) === 1146) {
+                return false;
+            }
+            throw $exception;
+        }
+    }
+    return true;
+}
+
+function import_schema(PDO $pdo): void
+{
+    // Kizárólag a csomag saját sémája importálható, feltöltött SQL nem.
+    $file = dirname(__DIR__) . '/schema.sql';
+    if (!is_readable($file)) {
+        throw new RuntimeException('A schema.sql nem olvasható.');
+    }
+    $sql = file_get_contents($file);
+    if ($sql === false) {
+        throw new RuntimeException('A schema.sql nem olvasható.');
+    }
+    $sql = str_starts_with($sql, "\xEF\xBB\xBF") ? substr($sql, 3) : $sql;
+    $sql = preg_replace('/^[ \t]*--[^\r\n]*(?:\r?\n|$)/m', '', $sql);
+    $statements = array_values(array_filter(array_map('trim', explode(';', $sql))));
+    $tables = [];
+    foreach ($statements as $statement) {
+        if (!preg_match('/\ACREATE TABLE IF NOT EXISTS (short_links|short_login_attempts)\s*\(/i', $statement, $match)) {
+            throw new RuntimeException('A schema.sql nem a támogatott telepítési séma.');
+        }
+        $tables[] = strtolower($match[1]);
+    }
+    sort($tables);
+    if ($tables !== ['short_links', 'short_login_attempts']) {
+        throw new RuntimeException('A schema.sql hiányos.');
+    }
+    // A MySQL DDL nem tranzakciós. Az IF NOT EXISTS miatt a félbeszakadt import újraindítható.
+    foreach ($statements as $statement) {
+        $pdo->exec($statement);
+    }
+    if (!schema_ready($pdo)) {
+        throw new RuntimeException('Az adatbázis telepítése nem fejeződött be.');
+    }
+}
+
+function installation_login_allowed(array $config): bool
+{
+    // Telepítés előtt még nincs meg a belépési kísérleteket tároló adatbázistábla.
+    // A zárolt fájl alkalmazásonként és kliensenként külön számlál, új sütivel is.
+    $scope = hash_hmac('sha256', $config['base_url'] . '|' . $config['db']['name'], $config['admin_password']);
+    $directory = rtrim(sys_get_temp_dir(), '/\\') . '/rovid-install-' . $scope;
+    if (!is_dir($directory) && !@mkdir($directory, 0700) && !is_dir($directory)) {
+        throw new RuntimeException('A telepítés ideiglenes könyvtára nem hozható létre.');
+    }
+    $key = hash('sha256', $_SERVER['REMOTE_ADDR'] ?? 'unknown');
+    $file = @fopen($directory . '/' . $key . '.json', 'c+');
+    if ($file === false) {
+        throw new RuntimeException('A telepítés belépési korlátja nem érhető el.');
+    }
+    try {
+        if (!flock($file, LOCK_EX)) {
+            throw new RuntimeException('A telepítés belépési korlátja nem zárolható.');
+        }
+        $state = json_decode(stream_get_contents($file), true);
+        $now = time();
+        if (!is_array($state) || !isset($state['started'], $state['attempts']) || $state['started'] <= $now - 900) {
+            $state = ['started' => $now, 'attempts' => 0];
+        }
+        $state['attempts'] = min((int) $state['attempts'] + 1, 6);
+        $encoded = json_encode($state, JSON_THROW_ON_ERROR);
+        rewind($file);
+        if (!ftruncate($file, 0) || fwrite($file, $encoded) !== strlen($encoded) || !fflush($file)) {
+            throw new RuntimeException('A telepítés belépési korlátja nem menthető.');
+        }
+        return $state['attempts'] <= 5;
+    } finally {
+        fclose($file);
+    }
+}
+
 function app_path(array $config): string
 {
     return rtrim(parse_url($config['base_url'], PHP_URL_PATH) ?: '', '/') . '/';

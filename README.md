@@ -6,6 +6,7 @@ Egyszerű, magyar nyelvű linkrövidítő cPaneles tárhelyre. Nincs Composer-, 
 - Kisbetűket, nagybetűket és számokat használ: például `https://pelda.hu/aB3xZ`.
 - A hosszt a domain utáni kódra értjük; a domain és a perjel nem számít bele.
 - A linkeket MySQL-adatbázis tárolja, újraindítás után is megmaradnak.
+- A szükséges táblák a webes felület **Séma importálása** gombjával létrehozhatók; phpMyAdmin nem szükséges.
 - A kezelőfelület jelszóval védett; a rövid linkek nyilvánosan megnyithatók.
 - Másolás gomb, lapozható linklista, létrehozási idő és megnyitások száma.
 - Mobilon is használható; JavaScript nélkül a létrehozás és az átirányítás is működik.
@@ -25,9 +26,8 @@ Egyszerű, magyar nyelvű linkrövidítő cPaneles tárhelyre. Nincs Composer-, 
 2. Hozz létre egy adatbázist és egy adatbázis-felhasználót saját jelszóval.
 3. Rendeld a felhasználót az adatbázishoz. Telepítéshez add meg az **ALL PRIVILEGES** jogosultságot.
 4. Jegyezd fel a **teljes, cPanel-előtagos neveket**, például `sajatfiok_rovid` és `sajatfiok_linkuser`.
-5. A **phpMyAdminban** válaszd ki az adatbázist, majd az **Importálás / Import** fülön importáld a `schema.sql` fájlt.
 
-Az importálás két táblát hoz létre. Nem töröl meglévő adatokat. Futás közben csak `SELECT`, `INSERT`, `UPDATE`, `DELETE` jogosultság szükséges.
+A táblákat később a linkrövidítő felületéről hozhatod létre. Ehhez `CREATE`, futás közben `SELECT`, `INSERT`, `UPDATE`, `DELETE` jogosultság szükséges. Az adatbázist és a felhasználót továbbra is a cPanelben kell létrehozni.
 
 ### 2. Fájlok feltöltése
 
@@ -67,7 +67,18 @@ return [
 - Ha a jelszó aposztrófot (`'`) vagy visszaperjelet (`\`) tartalmaz, PHP-karakterláncban írd `\'`, illetve `\\` alakban.
 - A `config.php` titkokat tartalmaz. Ne oszd meg és ne töltsd fel nyilvános kódtárba. Az alkalmazás `.htaccess` fájlja tiltja a közvetlen letöltését.
 
-### 4. Használat
+### 4. Séma importálása a felületről
+
+1. Nyisd meg a konfigurációban megadott webcímet. Ha valamelyik szükséges tábla hiányzik, automatikusan megjelenik az **Adatbázis telepítése** oldal.
+2. Add meg a `config.php` fájl `admin_password` beállításában szereplő kezelői jelszavadat.
+3. Kattints a **Séma importálása** gombra. A telepítő beolvassa a feltöltött csomag saját `schema.sql` fájlját, és létrehozza a két táblát.
+4. Sikeres telepítés után automatikusan belépsz, és megjelenik a linkrövidítő felület.
+
+Az import nem töröl meglévő táblákat vagy linkeket. Félbeszakadt telepítés esetén a hiba javítása után megismételhető. A már teljesen telepített adatbázisnál az importáló oldal nem jelenik meg, újabb importkérést az alkalmazás nem hajt végre. Eltérő szerkezetű, azonos nevű táblák átalakítására ez a telepítő nem szolgál.
+
+Csak a csomagban lévő séma importálható, SQL-fájl feltöltésére nincs szükség. A telepítési belépési kísérleteket 15 percenként 5-re korlátozzuk klienscímenként, a PHP ideiglenes könyvtárában tárolt zárolt fájllal; ezért az ideiglenes könyvtárnak írhatónak kell lennie. Kézi telepítéshez a `schema.sql` továbbra is importálható phpMyAdminból.
+
+### 5. Használat
 
 1. Nyisd meg a `base_url`-ban megadott címet, majd jelentkezz be a saját kezelői jelszavaddal.
 2. Illeszd be az eredeti `https://…` vagy `http://…` webcímet.
@@ -84,15 +95,23 @@ A kezelői munkamenet legfeljebb 8 óráig él. Azonos klienscímről 15 perc al
 
 **„Már csak a beállítás van hátra.”** Ellenőrizd a `config.php` nevét, PHP-szintaxisát, a teljes webcímet és a saját, legalább 12 karakteres kezelői jelszót.
 
-**„Az oldal most nem érhető el.”** Ellenőrizd az adatbázis nevét, felhasználóját és jelszavát, a jogosultságokat és a `schema.sql` importálását. A részletes hiba a tárhely PHP-hibanaplójában / cPanel **Errors** menüjében található; a program nem jeleníti meg az adatbázisadatokat a látogatóknak.
+**„Az oldal most nem érhető el.”** Ellenőrizd az adatbázis nevét, felhasználóját és jelszavát, valamint a jogosultságokat. A részletes hiba a tárhely PHP-hibanaplójában / cPanel **Errors** menüjében található; a program nem jeleníti meg az adatbázisadatokat a látogatóknak.
+
+**„Az importálás nem sikerült.”** Ellenőrizd, hogy a `schema.sql` is felkerült az `index.php` mellé, az adatbázis-felhasználónak van `CREATE` jogosultsága, és a PHP ideiglenes könyvtára írható. Javítás után ugyanazon a felületen újraindíthatod az importot. Az adatbázis-hiba pontos oka a PHP hibanaplójában található.
 
 **A felület működik, de a rövid link 404-et ad.** Ellenőrizd, hogy a gyökér `.htaccess` fájlja is felkerült. Próbáld ki közvetlenül a `https://pelda.hu/index.php?code=aB3xZ` alakot a saját, ténylegesen létrehozott kódoddal. Ha csak ez működik, engedélyeztesd a `mod_rewrite` modult, vagy állítsd a konfigurációban a `query_links` értékét `true`-ra. Alkönyvtárban a cím például `https://pelda.hu/rovid/index.php?code=aB3xZ`. A kód hossza ilyenkor is 5; a teljes URL hosszabb. A korábban megosztott szép URL-ek működéséhez továbbra is szükséges az átírás.
 
-**500-as hiba már a megnyitáskor.** Nézd meg az Apache hibanaplót. Ha a szolgáltató kifejezetten az `Options` direktívát tiltja, a gyökér `.htaccess` fájljából csak az `Options -Indexes -MultiViews` sort vedd ki. A többi védelmi szabály maradjon meg, és a cPanel **Indexes** menüjében tiltsd a könyvtárlistázást.
+**500-as hiba már a megnyitáskor.** Először ellenőrizd a cPanel PHP-verziókezelőjében, hogy az alkalmazás könyvtárához PHP 8.2 vagy újabb tartozik-e. A PHP / Apache hibanapló megmutatja a pontos okot. Ha a szolgáltató kifejezetten az `Options` direktívát tiltja, a gyökér `.htaccess` fájljából csak az `Options -Indexes -MultiViews` sort vedd ki. A többi védelmi szabály maradjon meg, és a cPanel **Indexes** menüjében tiltsd a könyvtárlistázást.
 
 **Belépés után visszakerülsz a belépőoldalra.** Ellenőrizd, hogy valóban a `base_url`-ban szereplő domainen, alkönyvtárban és HTTPS-sel nyitod meg az oldalt. A HTTPS-es konfigurációhoz a munkamenetsüti csak HTTPS-en kerül elküldésre.
 
 **A Másolás nem ír a vágólapra.** HTTPS-en és böngészőengedéllyel automatikus a másolás; más esetben a program kijelölhető mezőben mutatja a linket a kézi másoláshoz. JavaScript nélkül magát a megjelenített linket másold ki.
+
+## Frissítés korábbi verzióról
+
+Meglévő telepítéshez a **`link-rovidito-frissites.zip`** csomagot töltsd fel és csomagold ki az alkalmazás könyvtárába. Ez megtartja a saját `config.php` és `.htaccess` fájljaidat, így a cPanel által hozzáadott PHP-verzióbeállítást sem írja felül. A programfájlokat cseréli új verzióra. Ha a táblák már léteznek, a linkjeid azonnal elérhetők. Ha a séma még nincs importálva, a következő megnyitáskor megjelenik az importáló felület.
+
+A `link-rovidito-cpanel.zip` a teljes csomag új telepítéshez; meglévő oldalon a saját `.htaccess` fájlodat ne írd felül vele ellenőrzés nélkül.
 
 ## Fejlesztés és ellenőrzés
 
@@ -109,3 +128,11 @@ python3 tests/package.py
 ```
 
 Kimenet: `dist/link-rovidito-cpanel.zip`. A csomag csak a futtatáshoz szükséges fájlokat, a konfigurációmintát, az SQL-sémát és ezt az útmutatót tartalmazza, tényleges jelszavakat nem.
+
+Meglévő cPanel-beállításokat megőrző frissítőcsomag:
+
+```sh
+python3 tests/package.py --update
+```
+
+Kimenet: `dist/link-rovidito-frissites.zip`, konfiguráció és `.htaccess` fájlok nélkül.

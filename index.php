@@ -63,14 +63,48 @@ try {
     if ($method === 'POST' && !csrf_valid($_POST)) {
         http_response_code(403);
         $error = 'A munkamenet lejárt vagy a kérés érvénytelen. Frissítsd az oldalt, majd próbáld újra.';
-    } elseif ($method === 'POST') {
+    }
+
+    $pdo = database($config);
+    if (!schema_ready($pdo)) {
+        if ($method === 'POST' && $action === 'install' && $error === '') {
+            try {
+                if (!installation_login_allowed($config)) {
+                    http_response_code(429);
+                    header('Retry-After: 900');
+                    $error = 'Túl sok belépési kísérlet. Próbáld újra 15 perc múlva.';
+                } elseif (!hash_equals($config['admin_password'], input_string($_POST, 'password'))) {
+                    http_response_code(401);
+                    $error = 'A megadott jelszó nem megfelelő.';
+                } else {
+                    import_schema($pdo);
+                    finish_login($pdo, $config);
+                    $_SESSION['notice'] = 'Az adatbázis telepítése sikerült. Már létre is hozhatod az első rövid linkedet.';
+                    go_home($config);
+                }
+            } catch (Throwable $exception) {
+                error_log('Rovid installation: ' . $exception->getMessage());
+                http_response_code(503);
+                $error = 'Az importálás nem sikerült. Ellenőrizd, hogy a schema.sql fájl fel van-e töltve, az adatbázis-felhasználónak van-e CREATE jogosultsága, és a PHP ideiglenes könyvtára írható-e. A részletek a PHP hibanaplóban találhatók. A hiba javítása után újra megpróbálhatod.';
+            }
+        } elseif ($method === 'POST' && $error === '') {
+            http_response_code(409);
+            $error = 'Először importáld az adatbázissémát az alábbi gombbal.';
+        }
+        render_installation($config, $error);
+    }
+
+    if ($method === 'POST' && $error === '') {
+        if ($action === 'install') {
+            http_response_code(409);
+            $error = 'Az adatbázis már telepítve van. Nincs szükség újabb importálásra.';
+        }
         if ($action === 'logout') {
             $_SESSION = [];
             session_regenerate_id(true);
             go_home($config);
         }
         if ($action === 'login') {
-            $pdo = database($config);
             if (!login_allowed($pdo, $config)) {
                 http_response_code(429);
                 header('Retry-After: 900');
@@ -93,7 +127,6 @@ try {
         render_login($config, $error);
     }
 
-    $pdo = $pdo ?? database($config);
     $destination = '';
     $length = $config['default_length'];
     if ($method === 'POST' && $action === 'create' && $error === '') {
@@ -119,17 +152,17 @@ try {
     }
 
     $result = $_SESSION['result'] ?? null;
-    unset($_SESSION['result']);
+    $success = input_string($_SESSION, 'notice');
+    unset($_SESSION['result'], $_SESSION['notice']);
     $total = (int) $pdo->query('SELECT COUNT(*) FROM short_links')->fetchColumn();
     $requestedPage = filter_var($_GET['page'] ?? 1, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: 1;
     $page = min($requestedPage, max(1, (int) ceil($total / 20)));
     $statement = $pdo->prepare('SELECT code, destination, clicks, created_at FROM short_links ORDER BY id DESC LIMIT 20 OFFSET ?');
     $statement->bindValue(1, ($page - 1) * 20, PDO::PARAM_INT);
     $statement->execute();
-    render_dashboard($config, $statement->fetchAll(), $total, $page, $error, $destination, $length, $result);
+    render_dashboard($config, $statement->fetchAll(), $total, $page, $error, $destination, $length, $result, $success);
 } catch (Throwable $exception) {
     error_log('Rovid application: ' . $exception->getMessage());
     http_response_code(503);
-    render_problem('Az oldal most nem érhető el.', 'Próbáld újra később. Ha te kezeled az oldalt, ellenőrizd az adatbázis-beállításokat és a schema.sql importálását; a részletek a PHP hibanaplóban találhatók.', $path);
+    render_problem('Az oldal most nem érhető el.', 'Próbáld újra később. Ha te kezeled az oldalt, ellenőrizd az adatbázis-beállításokat és a PHP hibanaplót. Hiányzó táblák esetén a kezdőlapon indíthatod el a séma importálását.', $path);
 }
-

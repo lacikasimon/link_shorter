@@ -87,12 +87,12 @@ def csrf(content):
     return match.group(1)
 
 
-def write_config(directory, base, query=False, password=ADMIN_PASSWORD):
+def write_config(directory, base, query=False, password=ADMIN_PASSWORD, db_user="root"):
     # Generated values contain no PHP string metacharacters.
     (directory / "config.php").write_text("<?php return " + f"""[
         'base_url' => '{base}',
         'db' => ['host' => 'database', 'port' => 3306, 'name' => 'rovid',
-                 'user' => 'root', 'password' => '{DB_PASSWORD}'],
+                 'user' => '{db_user}', 'password' => '{DB_PASSWORD}'],
         'admin_password' => '{password}', 'default_length' => 5,
         'query_links' => {'true' if query else 'false'}
     ];""", encoding="utf-8")
@@ -174,6 +174,78 @@ def workflow(port, prefix, query=False):
     print(f"PASS: {'query fallback' if query else 'pretty URLs'} at {prefix}", flush=True)
 
 
+def installation_workflow(port, webroot, base):
+    check(sql("SHOW TABLES;") == "", "Installer test database is not empty")
+    browser = Browser(port)
+    status, _, body = browser.request("/rovid/")
+    check(status == 200 and "Séma importálása" in body, "Installer not shown for an empty database")
+    token = csrf(body)
+    check(browser.request("/rovid/?action=install")[0] == 200, "Installer GET failed")
+    check(sql("SHOW TABLES;") == "", "GET request modified the database")
+    status, _, _ = browser.request("/rovid/", {"action": "install", "password": ADMIN_PASSWORD})
+    check(status == 403, "Installation accepted without CSRF")
+    status, _, _ = browser.request("/rovid/", {"action": "install", "csrf": token, "password": "wrong"})
+    check(status == 401, "Installation accepted an incorrect password")
+    check(sql("SHOW TABLES;") == "", "Unauthorized installation created tables")
+
+    # A correct password cannot bypass a missing CREATE grant.
+    sql(f"CREATE USER 'rovid_no_create'@'%' IDENTIFIED BY '{DB_PASSWORD}'; "
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON rovid.* TO 'rovid_no_create'@'%';")
+    write_config(webroot / "no-create", base + "/no-create", db_user="rovid_no_create")
+    restricted = Browser(port)
+    _, _, body = restricted.request("/no-create/")
+    status, _, body = restricted.request("/no-create/", {"action": "install", "csrf": csrf(body), "password": ADMIN_PASSWORD})
+    check(status == 503 and "CREATE" in body and "SQLSTATE" not in body, "Missing CREATE privilege not explained safely")
+    check(sql("SHOW TABLES;") == "", "Failed installation created unexpected tables")
+
+    # The pre-installation throttle must survive fresh session cookies.
+    for attempt in range(6):
+        limited = Browser(port)
+        _, _, body = limited.request("/install-limited/")
+        status, _, _ = limited.request("/install-limited/", {"action": "install", "csrf": csrf(body),
+            "password": "wrong" if attempt < 5 else ADMIN_PASSWORD})
+        check(status == (401 if attempt < 5 else 429), "Installer throttle bypassed with a new session")
+    check(sql("SHOW TABLES;") == "", "Throttled installer modified the database")
+
+    schema_file = webroot / "rovid" / "schema.sql"
+    schema = schema_file.read_bytes()
+    schema_file.unlink()
+    status, _, body = browser.request("/rovid/", {"action": "install", "csrf": token, "password": ADMIN_PASSWORD})
+    check(status == 503 and "schema.sql" in body, "Missing schema file not explained")
+    check(DB_PASSWORD not in body and ADMIN_PASSWORD not in body, "Installer exposed credentials")
+    check(sql("SHOW TABLES;") == "", "Missing schema file left unexpected tables")
+    # cPanel editors may save UTF-8 with a BOM and Windows newlines.
+    schema_file.write_bytes(b"\xef\xbb\xbf" + schema.replace(b"\n", b"\r\n"))
+    status, headers, _ = browser.request("/rovid/", {"action": "install", "csrf": token,
+        "password": ADMIN_PASSWORD, "sql": "DROP DATABASE rovid;"})
+    check(status == 303 and headers.get("location") == base + "/rovid/", "Web schema import failed")
+    check(sql("SHOW TABLES;").splitlines() == ["short_links", "short_login_attempts"], "Incorrect imported tables")
+    status, _, body = browser.request("/rovid/")
+    check(status == 200 and "Az adatbázis telepítése sikerült" in body and "Új rövid link" in body,
+          "Installer did not sign in or show success")
+    token = csrf(body)
+    status, _, body = browser.request("/rovid/", {"action": "install", "csrf": token, "password": ADMIN_PASSWORD})
+    check(status == 409 and "már telepítve" in body, "Installed database accepted another import")
+    check(sql("SELECT COUNT(*) FROM short_links;") == "0", "Import created unexpected links")
+    sql((ROOT / "schema.sql").read_text())
+    print("PASS: web schema import, CSRF/password checks, cross-session throttling, missing file, CREATE grant, repeat import", flush=True)
+
+
+def partial_installation_workflow(port):
+    rows = sql("SELECT * FROM short_links ORDER BY id;")
+    sql("CREATE TABLE unrelated_data (value INT); INSERT INTO unrelated_data VALUES (123); "
+        "DROP TABLE short_login_attempts;")
+    browser = Browser(port)
+    status, _, body = browser.request("/partial/")
+    check(status == 200 and "Séma importálása" in body, "Partial schema not detected")
+    status, _, _ = browser.request("/partial/", {"action": "install", "csrf": csrf(body), "password": ADMIN_PASSWORD})
+    check(status == 303, "Partial schema could not be completed")
+    check(sql("SELECT * FROM short_links ORDER BY id;") == rows, "Partial import modified existing links")
+    check(sql("SELECT value FROM unrelated_data;") == "123", "Partial import modified unrelated data")
+    check(sql("SELECT COUNT(*) FROM short_login_attempts;") == "0", "Missing login table not restored")
+    print("PASS: partial import preserves links and unrelated tables", flush=True)
+
+
 def run():
     print("Building PHP 8.3 / Apache test image…", flush=True)
     docker("build", "-q", "-t", IMAGE, "-f", str(ROOT / "tests/Dockerfile"), str(ROOT))
@@ -182,7 +254,7 @@ def run():
         os.chmod(root, 0o755)
         webroot = root / "www"
         webroot.mkdir()
-        for relative in ["", "rovid", "query", "setup"]:
+        for relative in ["", "rovid", "query", "setup", "no-create", "install-limited", "partial"]:
             target = webroot / relative
             target.mkdir(exist_ok=True)
             for filename in FILES:
@@ -195,18 +267,16 @@ def run():
                    "-e", f"MARIADB_ROOT_PASSWORD={DB_PASSWORD}", "-e", "MARIADB_DATABASE=rovid",
                    "mariadb:11.4")
             wait_for(lambda: sql("SELECT 1;") == "1")
-            sql((ROOT / "schema.sql").read_text())
-            sql((ROOT / "schema.sql").read_text())
-            print("PASS: schema import and repeated import", flush=True)
             docker("run", "-d", "--name", WEB, "--network", NETWORK,
                    "-p", "127.0.0.1::80", "--mount", f"type=bind,source={webroot},target=/var/www/html,readonly",
                    IMAGE)
             port = int(docker("port", WEB, "80/tcp").rsplit(":", 1)[1])
             base = f"http://127.0.0.1:{port}"
-            for relative, query in [("", False), ("rovid", False), ("query", True)]:
+            for relative, query in [("", False), ("rovid", False), ("query", True), ("install-limited", False), ("partial", False)]:
                 write_config(webroot / relative, base + (f"/{relative}" if relative else ""), query)
             browser = Browser(port)
             wait_for(lambda: browser.request()[0] == 200)
+            installation_workflow(port, webroot, base)
             workflow(port, "/")
             workflow(port, "/rovid/")
             workflow(port, "/query/", query=True)
@@ -214,7 +284,7 @@ def run():
             status, _, body = browser.request("/setup/")
             check(status == 503 and "Már csak a beállítás" in body, "Missing config not handled")
             for blocked in ["/config.php", "/config.example.php", "/schema.sql", "/README.md",
-                            "/app/functions.php", "/.git/config", "/rovid/config.php"]:
+                            "/app/functions.php", "/.git/config", "/rovid/config.php", "/error_log"]:
                 status, _, body = browser.request(blocked)
                 check(status == 403, f"Protected file not blocked: {blocked}")
                 check(DB_PASSWORD not in body and ADMIN_PASSWORD not in body, "Secret exposed")
@@ -247,6 +317,7 @@ def run():
             for _ in range(5):
                 check(browser.request("/", {"action": "login", "csrf": token, "password": "bad"})[0] == 401, "Rate limit triggered too early")
             check(browser.request("/", {"action": "login", "csrf": token, "password": "bad"})[0] == 429, "Login rate limit missing")
+            partial_installation_workflow(port)
             docker("stop", DATABASE)
             status, _, body = browser.request("/CaseA")
             check(status == 503 and DB_PASSWORD not in body and "SQLSTATE" not in body, "Database failure leaked details")
