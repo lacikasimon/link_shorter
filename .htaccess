@@ -1,0 +1,18 @@
+Options -Indexes -MultiViews
+DirectoryIndex index.php
+
+<FilesMatch "(?i)^(config(?:\.example)?\.php|schema\.sql|README\.md|.*\.(zip|log|bak))$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Belső fájlok és fejlesztői könyvtárak soha ne legyenek elérhetők.
+    RewriteRule (^|/)\. - [F,END]
+    RewriteRule ^(app|tests|dist)(/|$) - [F,END]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    # Alkönyvtárban is működik; az eredeti query nem írhatja felül a kódot.
+    RewriteRule ^([A-Za-z0-9]{3,32})/?$ index.php?code=$1 [END]
+</IfModule>
+
